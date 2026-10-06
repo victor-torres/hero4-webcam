@@ -55,6 +55,6 @@ EOF
 mkdir -p dist
 rm -f "dist/$name.zip"
 (cd "$stage" && zip -qrX - "$name") > "dist/$name.zip"
-tar -czf "dist/faad2-$faad_ver.tar.gz" -C vendor --exclude .git faad2
+tar -chzf "dist/faad2-$faad_ver.tar.gz" -C vendor --exclude .git faad2
 ls -l "dist/$name.zip" "dist/faad2-$faad_ver.tar.gz"
 unzip -l "dist/$name.zip"
