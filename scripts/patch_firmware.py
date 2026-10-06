@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0
 """Build the patched HERO4 Black v05.00.00 firmware.
 
+    python3 patch_firmware.py UPDATE.zip /Volumes/SDCARD
     python3 scripts/patch_firmware.py firmware/v05.00.00/camera_firmware.bin build/camera_firmware.bin
+
+Given GoPro's official UPDATE.zip and a directory (the SD card), writes the
+directory's UPDATE/ folder: the patched camera_firmware.bin next to the stock
+camera_loaders.bin and hd4_update.txt. Given camera_firmware.bin, writes just
+the patched image. Needs lzallright (pip install lzallright).
 
 Two changes, both data only; bootloaders, DSP, kernel and RTOS code stay byte-identical:
 
@@ -26,6 +32,7 @@ import hashlib
 import pathlib
 import struct
 import sys
+import zipfile
 import zlib
 
 from lzallright import LZOCompressor
@@ -40,7 +47,9 @@ INO_NODE, DATA_NODE = 0, 1
 COMPR_NONE, COMPR_LZO = 0, 1
 INO_SIZE_OFF = CH_SIZE + 16 + 8   # after key and creat_sqnum
 
-# camera_firmware.bin from the official HD4.02 v05.00.00 UPDATE.zip
+# The official HD4.02 v05.00.00 UPDATE.zip, and the files in it
+UPDATE_SHA256 = "1d88f5dd7a4fdaa6c1664841996efaf68302b2fe0be89d29eb7bec514124ac7e"
+UPDATE_FILES = ("camera_firmware.bin", "camera_loaders.bin", "hd4_update.txt")
 STOCK_SHA256 = "f1be2cce699691cd1cd7754cad51b82fdb0c99c036a913bc11024454ec5e29c1"
 # Result of this script on it: the image flashed and tested by the authors
 PATCHED_SHA256 = "32c9cca1b066ebc23ff6387b810cbdff7d13f42a1b00a71bce89a30f6048c47d"
@@ -153,16 +162,11 @@ def patch_rtos_idle720(img):
     return bytes(img)
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("src", type=pathlib.Path)
-    p.add_argument("dst", type=pathlib.Path)
-    args = p.parse_args()
-    src, dst = args.src, args.dst
-    fw = bytearray(src.read_bytes())
+def patch(fw, name):
+    fw = bytearray(fw)
     digest = hashlib.sha256(fw).hexdigest()
     if digest != STOCK_SHA256:
-        sys.exit(f"{src} is not the official v05.00.00 camera_firmware.bin "
+        sys.exit(f"{name} is not the official v05.00.00 camera_firmware.bin "
                  f"(sha256 {digest}, expected {STOCK_SHA256})")
 
     rtos = [s for s in sections(bytes(fw)) if s["addr"] == RTOS_BASE]
@@ -186,10 +190,36 @@ def main():
     struct.pack_into("<I", fw, 0, zlib.crc32(fw[GLOBAL_HEADER_SIZE:]))
     if hashlib.sha256(fw).hexdigest() != PATCHED_SHA256:
         sys.exit("patched image differs from the tested one; not writing it")
+    return bytes(fw)
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(fw)
-    print(f"wrote {dst}")
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("src", type=pathlib.Path, help="UPDATE.zip, or camera_firmware.bin")
+    p.add_argument("dst", type=pathlib.Path, help="directory for UPDATE/ (with a zip), or output file")
+    args = p.parse_args()
+    src, dst = args.src, args.dst
+
+    if not zipfile.is_zipfile(src):
+        fw = patch(src.read_bytes(), src)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(fw)
+        print(f"wrote {dst}")
+        return
+
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    if digest != UPDATE_SHA256:
+        sys.exit(f"{src} is not the official v05.00.00 UPDATE.zip (sha256 {digest}, expected {UPDATE_SHA256})")
+    if not dst.is_dir():
+        sys.exit(f"{dst} is not a directory (the SD card, or a folder to copy to it)")
+    with zipfile.ZipFile(src) as z:
+        files = {n: z.read(n) for n in UPDATE_FILES}
+    files["camera_firmware.bin"] = patch(files["camera_firmware.bin"], "camera_firmware.bin")
+    out = dst / "UPDATE"
+    out.mkdir(exist_ok=True)
+    for n in UPDATE_FILES:
+        (out / n).write_bytes(files[n])
+        print(f"wrote {out / n}")
 
 
 if __name__ == "__main__":

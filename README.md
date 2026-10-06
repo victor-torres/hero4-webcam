@@ -15,9 +15,9 @@ QuickTime, OBS, Zoom, Chrome and other apps, about 45 s after power-on. Video la
 - **GoPro HERO4 Black** (model HD4.02). Not the Silver or the Session: their firmware is different.
 - Official firmware **v05.00.00** on the camera. The patch is made from this exact version only.
 - A microSD card (FAT32) and a USB cable.
-- A computer with Docker (for the cross-compiler) and Python 3.9+. Tested on macOS (Apple Silicon, with
-  [colima](https://github.com/abiosoft/colima) or Docker Desktop). The camera has only been tested with macOS
-  as the host.
+- A computer with Python 3.9+. Building from source also needs Docker (for the cross-compiler); tested on macOS
+  (Apple Silicon, with [colima](https://github.com/abiosoft/colima) or Docker Desktop). The camera has only been
+  tested with macOS as the host.
 
 ## How it works
 
@@ -37,18 +37,38 @@ streaming). The firmware is only protected by CRCs, not signed.
 
 The whole story, with the dead ends, is in [docs/findings.md](docs/findings.md).
 
-## Step by step
+## Install (prebuilt)
+
+The [releases](https://github.com/victor-torres/hero4-webcam/releases) have everything built except the firmware:
+GoPro's code isn't ours to share, so the patcher makes it from your own copy of the official update.
+
+1. Download GoPro's v05.00.00 update for the HERO4 Black, and keep a copy on another card. The patcher checks its
+   SHA-256 (`1d88f5dd…124ac7e`) and refuses anything else:
+
+   ```
+   https://device-firmware.gp-static.com/13/HD4.02/camera_fw/05.00.00/UPDATE.zip
+   ```
+
+2. Download `hero4-webcam-<version>.zip` from the latest release and unzip it.
+3. Patch the firmware onto the card. This writes `UPDATE/` on it, and only if the result is byte-for-byte the image
+   we flashed and tested (SHA-256 `32c9cca1…`):
+
+   ```bash
+   python3 -m pip install lzallright
+   ```
+
+   ```bash
+   python3 patch_firmware.py UPDATE.zip /Volumes/SDCARD
+   ```
+
+4. Copy `h4.sh` and the `h4` folder from the release to the root of the card.
+5. Flash and use it: [steps 4 and 5](#4-flash) below.
+
+## Build from source
 
 ### 1. Get the official firmware
 
-Download GoPro's v05.00.00 update for the HERO4 Black:
-
-```
-https://device-firmware.gp-static.com/13/HD4.02/camera_fw/05.00.00/UPDATE.zip
-```
-
-Save it as `firmware/UPDATE.zip`, and keep a copy on another card. The scripts check its SHA-256
-(`1d88f5dd…124ac7e`) and refuse anything else.
+Download GoPro's v05.00.00 update (link above) and save it as `firmware/UPDATE.zip`.
 
 ### 2. Unpack and patch
 
@@ -88,7 +108,8 @@ while.
 ### 4. Flash
 
 1. Make sure the camera is on v05.00.00 and the battery is charged.
-2. Copy everything in `build/sdcard/` to the root of the card: `UPDATE/`, `h4.sh` and `h4/`.
+2. The root of the card needs `UPDATE/`, `h4.sh` and `h4/`: copy everything in `build/sdcard/` there (with the
+   prebuilt release, the install steps above already did).
 3. Put the card in the camera and turn it on. It installs the update by itself (a few minutes; don't turn it off).
 4. When the camera is back to normal, delete the `UPDATE/` folder from the card.
 
@@ -128,7 +149,8 @@ stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhar
 
 ## Layout
 
-- `scripts/`: firmware unpacking and patching, build scripts, `stream_test.py`, `h4send.py` (file upload, needs the shell)
+- `scripts/`: firmware unpacking and patching, build and release scripts, `stream_test.py`, `h4send.py` (file upload,
+  needs the shell)
 - `sdcard/`: `h4.sh` and the scripts that go in `h4/` on the card
 - `src/ambarella_udc/`: patched Ambarella USB device controller driver
 - `src/h4_udc_dev/`: registers the controller's platform device

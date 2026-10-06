@@ -9,3 +9,4 @@ vendor/*
 .venv/
 build/
 captures/
+dist/
