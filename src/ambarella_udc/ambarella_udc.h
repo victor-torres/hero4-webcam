@@ -135,6 +135,7 @@ struct ambarella_udc {
 	struct proc_dir_entry		*proc_file;
 	struct work_struct		uevent_work;
 	struct timer_list		vbus_timer;
+	struct timer_list		kick_timer;	/* h4: un-wedges bulk IN endpoints */
 	enum ambarella_udc_status	pre_uevent_status;
 
 	struct ambarella_udc_controller	*controller_info;

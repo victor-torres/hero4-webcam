@@ -6,7 +6,8 @@
  *     shell keep working;
  *   - UAC1 microphone (f_h4mic.c), PCM written to /dev/h4mic by h4uvc; only
  *     with the patched UDC driver (src/ambarella_udc);
- *   - UVC 1.1 camera with one frame-based H.264 format, 1280x720 at 29.97 fps,
+ *   - UVC 1.1 camera with one frame-based H.264 format, 1920x1080 or 1280x720
+ *     at 29.97 fps,
  *     streamed over a bulk endpoint (the Ambarella UDC names no isochronous
  *     endpoints, and macOS accepts bulk). The userspace server (h4uvc) answers
  *     the UVC control requests and feeds it the camera's own H.264 stream.
@@ -194,7 +195,7 @@ static const struct uvc_format_frame_based uvc_format_h264 = {
 	.bDescriptorType	= USB_DT_CS_INTERFACE,
 	.bDescriptorSubType	= UVC_VS_FORMAT_FRAME_BASED,
 	.bFormatIndex		= 1,
-	.bNumFrameDescriptors	= 1,
+	.bNumFrameDescriptors	= 2,
 	.guidFormat		=
 		{ 'H',  '2',  '6',  '4', 0x00, 0x00, 0x10, 0x00,
 		 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71},
@@ -207,11 +208,27 @@ static const struct uvc_format_frame_based uvc_format_h264 = {
 	.bVariableSize		= 1,
 };
 
-static const struct uvc_frame_frame_based_1 uvc_frame_h264_720p = {
+static const struct uvc_frame_frame_based_1 uvc_frame_h264_1080p = {
 	.bLength		= sizeof(struct uvc_frame_frame_based_1),
 	.bDescriptorType	= USB_DT_CS_INTERFACE,
 	.bDescriptorSubType	= UVC_VS_FRAME_FRAME_BASED,
 	.bFrameIndex		= 1,
+	.bmCapabilities		= 0,
+	.wWidth			= cpu_to_le16(1920),
+	.wHeight		= cpu_to_le16(1080),
+	.dwMinBitRate		= cpu_to_le32(1000000),
+	.dwMaxBitRate		= cpu_to_le32(20000000),
+	.dwDefaultFrameInterval	= cpu_to_le32(333667),	/* 29.97 fps, 100 ns units */
+	.bFrameIntervalType	= 1,
+	.dwBytesPerLine		= 0,
+	.dwFrameInterval[0]	= cpu_to_le32(333667),
+};
+
+static const struct uvc_frame_frame_based_1 uvc_frame_h264_720p = {
+	.bLength		= sizeof(struct uvc_frame_frame_based_1),
+	.bDescriptorType	= USB_DT_CS_INTERFACE,
+	.bDescriptorSubType	= UVC_VS_FRAME_FRAME_BASED,
+	.bFrameIndex		= 2,
 	.bmCapabilities		= 0,
 	.wWidth			= cpu_to_le16(1280),
 	.wHeight		= cpu_to_le16(720),
@@ -243,6 +260,7 @@ static const struct uvc_descriptor_header * const uvc_control_cls[] = {
 static const struct uvc_descriptor_header * const uvc_streaming_cls[] = {
 	(const struct uvc_descriptor_header *) &uvc_input_header,
 	(const struct uvc_descriptor_header *) &uvc_format_h264,
+	(const struct uvc_descriptor_header *) &uvc_frame_h264_1080p,
 	(const struct uvc_descriptor_header *) &uvc_frame_h264_720p,
 	(const struct uvc_descriptor_header *) &uvc_color_matching,
 	NULL,

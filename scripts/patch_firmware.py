@@ -19,9 +19,10 @@ Two changes, both data only; bootloaders, DSP, kernel and RTOS code stay byte-id
    uncompressed with exactly the same node length, and the file size in its inode
    node is adjusted.
 
-2. 720p idle preview. RTOS video mode table entry 62 is the idle (not recording)
+2. 1080p idle preview. RTOS video mode table entry 62 is the idle (not recording)
    1080 SuperView 30 preview: its DSP and encoder secondary sizes go from 848x480
-   to 1280x720, so the live stream is 720p with nothing written to the card. Main
+   to 1920x1080, so the live stream is 1080p with nothing written to the card
+   (h4uvc asks for 1280x720 through the HTTP API when an app wants 720p). Main
    size, bitrate and frame rate stay stock.
 
 Only the official v05.00.00 image is accepted, and the result must match the
@@ -52,7 +53,7 @@ UPDATE_SHA256 = "1d88f5dd7a4fdaa6c1664841996efaf68302b2fe0be89d29eb7bec514124ac7
 UPDATE_FILES = ("camera_firmware.bin", "camera_loaders.bin", "hd4_update.txt")
 STOCK_SHA256 = "f1be2cce699691cd1cd7754cad51b82fdb0c99c036a913bc11024454ec5e29c1"
 # Result of this script on it: the image flashed and tested by the authors
-PATCHED_SHA256 = "32c9cca1b066ebc23ff6387b810cbdff7d13f42a1b00a71bce89a30f6048c47d"
+PATCHED_SHA256 = "e0b87c260ea2d5a465bd7f40946a6dffdc9ba6d698fe2f15c8d7b87fe2ad1e28"
 
 ORIGINAL_MARK = b"#This script is used to mount/umount sd card in ambafs."
 HOOK = b"h4.sh"
@@ -136,29 +137,29 @@ MAIN_BITRATE = 0xCC
 MAIN_RATE = 0xD4               # time scale, ticks per frame
 DSP_SEC_SIZE = 0x70            # secondary buffer width, height
 ENC_SEC_SIZE = 0x100           # secondary encoder width, height
-SEC_FROM, SEC_TO = (848, 480), (1280, 720)
-IDLE720_ENTRY = 62             # idle (not recording) SuperView 30 preview
-IDLE720_ADDR = 0x03EF1118
-IDLE720_BITRATE = 500_000
-IDLE720_RATE = (90000, 3003)   # 29.97 fps
+SEC_FROM, SEC_TO = (848, 480), (1920, 1080)
+IDLE_ENTRY = 62             # idle (not recording) SuperView 30 preview
+IDLE_ADDR = 0x03EF1118
+IDLE_BITRATE = 500_000
+IDLE_RATE = (90000, 3003)   # 29.97 fps
 
 
-def patch_rtos_idle720(img):
+def patch_rtos_idle(img):
     img = bytearray(img)
     u32 = lambda addr: struct.unpack_from("<I", img, addr - RTOS_BASE)[0]
-    e = u32(MODE_TABLE + 4 * IDLE720_ENTRY)
+    e = u32(MODE_TABLE + 4 * IDLE_ENTRY)
     main = (u32(e + MAIN_SIZE), u32(e + MAIN_SIZE + 4))
     bitrate = u32(e + MAIN_BITRATE)
     rate = (u32(e + MAIN_RATE), u32(e + MAIN_RATE + 4))
     dsp = (u32(e + DSP_SEC_SIZE), u32(e + DSP_SEC_SIZE + 4))
     enc = (u32(e + ENC_SEC_SIZE), u32(e + ENC_SEC_SIZE + 4))
-    if not (e == IDLE720_ADDR and main == (1920, 1080) and bitrate == IDLE720_BITRATE
-            and rate == IDLE720_RATE and dsp == SEC_FROM and enc == SEC_FROM):
-        sys.exit(f"entry {IDLE720_ENTRY} is not the expected idle 1080p30 preview "
+    if not (e == IDLE_ADDR and main == (1920, 1080) and bitrate == IDLE_BITRATE
+            and rate == IDLE_RATE and dsp == SEC_FROM and enc == SEC_FROM):
+        sys.exit(f"entry {IDLE_ENTRY} is not the expected idle 1080p30 preview "
                  f"(addr {e:#x}, main {main}, bitrate {bitrate}, rate {rate}, dsp {dsp}, enc {enc})")
     for off in (DSP_SEC_SIZE, ENC_SEC_SIZE):
         struct.pack_into("<II", img, e + off - RTOS_BASE, *SEC_TO)
-    print(f"rtos: idle secondary 1280x720 in mode {IDLE720_ENTRY}@{rate[0] / rate[1]:.2f}")
+    print(f"rtos: idle secondary {SEC_TO[0]}x{SEC_TO[1]} in mode {IDLE_ENTRY}@{rate[0] / rate[1]:.2f}")
     return bytes(img)
 
 
@@ -174,7 +175,7 @@ def patch(fw, name):
         sys.exit("could not find the RTOS section")
     s = rtos[0]
     start, end = s["start"], s["start"] + s["length"]
-    fw[start:end] = patch_rtos_idle720(bytes(fw[start:end]))
+    fw[start:end] = patch_rtos_idle(bytes(fw[start:end]))
     struct.pack_into("<I", fw, start - SECTION_HEADER_SIZE, zlib.crc32(fw[start:end]))
 
     ubi = [s for s in sections(bytes(fw)) if fw[s["start"]:s["start"] + 4] == b"UBI#"]

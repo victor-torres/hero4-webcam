@@ -216,6 +216,8 @@ struct h4mic {
 	struct usb_ep *ep;
 	struct usb_request *req[MIC_NREQ];
 	int ac_intf, as_intf, alt;
+	bool enabled;			/* endpoint enabled (kept across alt 0) */
+	unsigned long busy;		/* bit i: req[i] is queued */
 
 	spinlock_t lock;		/* ring */
 	u8 *ring;
@@ -311,15 +313,22 @@ static void mic_fill(struct h4mic *mic, struct usb_request *req)
 static void mic_complete(struct usb_ep *ep, struct usb_request *req)
 {
 	struct h4mic *mic = req->context;
+	int i;
 
-	if (req->status == -ESHUTDOWN || req->status == -ECONNRESET || mic->alt != 1)
-		return;	/* endpoint disabled: the request stays ours */
+	for (i = 0; i < MIC_NREQ && mic->req[i] != req; i++)
+		;
+	if (req->status == -ESHUTDOWN || req->status == -ECONNRESET || mic->alt != 1) {
+		clear_bit(i, &mic->busy);	/* stream off: the request stays ours */
+		return;
+	}
 	if (req->status)
 		mic->errors++;
 	mic->packets++;
 	mic_fill(mic, req);
-	if (usb_ep_queue(ep, req, GFP_ATOMIC))
+	if (usb_ep_queue(ep, req, GFP_ATOMIC)) {
+		clear_bit(i, &mic->busy);
 		pr_info_ratelimited("h4mic: queue failed\n");
+	}
 }
 
 /* --- /dev/h4mic --------------------------------------------------------- */
@@ -391,13 +400,28 @@ static struct miscdevice h4mic_misc = {
 
 /* --- function ------------------------------------------------------------ */
 
-static void mic_stop(struct h4mic *mic)
+/* The host closing the microphone (alt 0) only stops refilling: the endpoint
+ * stays enabled and the requests already queued wait for the next IN tokens.
+ * Disabling the isochronous endpoint and enabling it again hung the whole
+ * camera (RTOS included, no kernel message) within a second of the second
+ * open, on either firmware. Only a real disconnect or reconfiguration
+ * (mic_disable) disables it. */
+static void mic_pause(struct h4mic *mic)
 {
 	if (mic->alt == 1) {
 		mic->alt = 0;
-		usb_ep_disable(mic->ep);
 		pr_info("h4mic: stopped; %lu packets, %lu errors, %lu underruns, %lu overruns so far; buffer %u ms\n",
 			mic->packets, mic->errors, mic->underruns, mic->overruns, mic->target / MIC_MS(1));
+	}
+}
+
+static void mic_stop(struct h4mic *mic)
+{
+	mic_pause(mic);
+	if (mic->enabled) {
+		mic->enabled = false;
+		usb_ep_disable(mic->ep);
+		mic->busy = 0;
 	}
 }
 
@@ -412,14 +436,16 @@ static int mic_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	if (intf != mic->as_intf || alt > 1)
 		return -EINVAL;
 
-	mic_stop(mic);
+	mic_pause(mic);
 	if (alt == 0)
 		return 0;
 
-	ret = config_ep_by_speed(f->config->cdev->gadget, f, mic->ep);
-	if (ret) {
-		pr_info("h4mic: no descriptor for %s (%d)\n", mic->ep->name, ret);
-		return ret;
+	if (!mic->enabled) {
+		ret = config_ep_by_speed(f->config->cdev->gadget, f, mic->ep);
+		if (ret) {
+			pr_info("h4mic: no descriptor for %s (%d)\n", mic->ep->name, ret);
+			return ret;
+		}
 	}
 	/* Nobody read while the stream was off, so the ring may hold up to
 	 * MIC_RING of old audio: keep only the newest target's worth (latency). */
@@ -429,13 +455,19 @@ static int mic_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	mic->avg = (unsigned long)mic->fill << 10;
 	spin_unlock_irqrestore(&mic->lock, flags);
 
-	ret = usb_ep_enable(mic->ep);
-	if (ret)
-		return ret;
+	if (!mic->enabled) {
+		ret = usb_ep_enable(mic->ep);
+		if (ret)
+			return ret;
+		mic->enabled = true;
+	}
 	mic->alt = 1;
 	for (i = 0; i < MIC_NREQ; i++) {
+		if (test_and_set_bit(i, &mic->busy))
+			continue;	/* still queued from before the pause */
 		mic_fill(mic, mic->req[i]);
-		usb_ep_queue(mic->ep, mic->req[i], GFP_ATOMIC);
+		if (usb_ep_queue(mic->ep, mic->req[i], GFP_ATOMIC))
+			clear_bit(i, &mic->busy);
 	}
 	return 0;
 }

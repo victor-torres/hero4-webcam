@@ -1510,7 +1510,13 @@ static irqreturn_t ambarella_udc_irq(int irq, void *_dev)
 			amba_clrbitsl(USB_DEV_EP_INTR_MSK_REG, masked);
 			masked = 0;
 		}
-		if (time_after(jiffies, window + HZ)) {
+		/* Not time_after(jiffies, window + HZ): jiffies starts just
+		 * below the wrap (and the hibernation snapshot keeps it there),
+		 * so against window = 0 that stayed false and the counts never
+		 * reset. Every endpoint then "stormed" after 50000 ordinary
+		 * interrupts (the microphone every ~51 s) and was masked for a
+		 * second. */
+		if (!time_in_range(jiffies, window, window + HZ)) {
 			window = jiffies;
 			memset(count, 0, sizeof(count));
 		}
@@ -2469,6 +2475,32 @@ EXPORT_SYMBOL(usb_gadget_unregister_driver);
  * Description:
  *	Probe udc driver.
  */
+/* h4: a bulk IN endpoint was seen left masked and NAKing with requests
+ * queued: the video's, right as the microphone started; the host got NAKs
+ * forever while all of h4cam's video requests sat in the queue, so no new
+ * usb_ep_queue() came to re-arm it. A masked bulk IN endpoint with something
+ * queued is never right, so every 100 ms unmask it and clear NAK; the host's
+ * next IN token then starts the DMA (udc_epin_interrupt, IN_PKT). */
+static void ambarella_kick_timer(unsigned long data)
+{
+	struct ambarella_udc *udc = (struct ambarella_udc *)data;
+	unsigned long flags;
+	int i;
+
+	spin_lock_irqsave(&udc->lock, flags);
+	for (i = 1; i < EP_NUM_MAX; i++) {
+		struct ambarella_ep *ep = &udc->ep[i];
+		if (ep->dir != USB_DIR_IN || !ep->ep.desc || ambarella_ep_is_iso(ep) || ep->halted ||
+		    list_empty(&ep->queue) || !(amba_readl(USB_DEV_EP_INTR_MSK_REG) & (1 << ep->id)))
+			continue;
+		amba_clrbitsl(USB_DEV_EP_INTR_MSK_REG, 1 << ep->id);
+		ambarella_clr_ep_nak(ep);
+		printk_ratelimited(KERN_ERR "h4: %s was masked with requests queued; re-armed\n", ep->ep.name);
+	}
+	spin_unlock_irqrestore(&udc->lock, flags);
+	mod_timer(&udc->kick_timer, jiffies + HZ / 10);
+}
+
 static int ambarella_udc_probe(struct platform_device *pdev)
 {
 	struct ambarella_udc *udc;
@@ -2586,6 +2618,9 @@ static int ambarella_udc_probe(struct platform_device *pdev)
 		goto err_out6;
 	}
 
+	setup_timer(&udc->kick_timer, ambarella_kick_timer, (unsigned long)udc);
+	mod_timer(&udc->kick_timer, jiffies + HZ / 10);
+
 	dprintk(DEBUG_NORMAL, "probe ok\n");
 
 	goto out;
@@ -2625,6 +2660,7 @@ static int ambarella_udc_remove(struct platform_device *pdev)
 
 	device_unregister(&udc->gadget.dev);
 
+	del_timer_sync(&udc->kick_timer);
 	if (udc->controller_info->vbus_polled)
 		del_timer_sync(&udc->vbus_timer);
 

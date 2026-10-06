@@ -2,9 +2,10 @@
 
 Turn a **GoPro HERO4 Black** into a plug-and-play USB webcam, with no HDMI capture card and no app on the computer.
 
-After the patch the camera boots as a standard USB device: **webcam** (1280x720 at 29.97 fps), **microphone**
-(48 kHz stereo, the camera's own mic) and **USB Ethernet**. On macOS it shows up as "GoPro HERO4" in Photo Booth,
-QuickTime, OBS, Zoom, Chrome and other apps, about 45 s after power-on. Video latency is about 190 ms glass to glass.
+After the patch the camera boots as a standard USB device: **webcam** (1920x1080 or 1280x720 at 29.97 fps, H.264,
+the app picks), **microphone** (48 kHz stereo, the camera's own mic) and **USB Ethernet**. On macOS it shows up as
+"GoPro HERO4" in Photo Booth, QuickTime, OBS, Zoom, Chrome and other apps, about 45 s after power-on. Video latency
+is about 225 ms glass to glass at 1080p and 195 ms at 720p.
 
 > **Risk:** this flashes modified firmware to your camera. It worked on ours, but a bad flash can brick a camera,
 > and modified firmware may void the warranty. You do this at your own risk. This project is not affiliated with
@@ -28,7 +29,8 @@ streaming). The firmware is only protected by CRCs, not signed.
    stay byte-identical.
    - A Linux script that runs whenever the SD card is mounted now also runs `h4.sh` from the card.
    - One entry of the RTOS video mode table changes so the idle preview (1080 SuperView 30, not recording) is
-     1280x720 instead of 848x480. Nothing is written to the card while streaming.
+     1920x1080 instead of 848x480. 720p comes from the same mode through the HTTP API. Nothing is written to the card
+     while streaming.
 2. **Kernel modules**, loaded from the card by `h4.sh`. GoPro's kernel has no USB gadget support. We build the
    modules from the GPL source: a module that registers the USB controller, a patched controller driver
    (isochronous transfers for the microphone), and `h4cam`, a composite gadget with UVC, UAC1 and CDC ECM.
@@ -51,7 +53,7 @@ GoPro's code isn't ours to share, so the patcher makes it from your own copy of 
 
 2. Download `hero4-webcam-<version>.zip` from the latest release and unzip it.
 3. Patch the firmware onto the card. This writes `UPDATE/` on it, and only if the result is byte-for-byte the image
-   we flashed and tested (SHA-256 `32c9cca1…`):
+   we flashed and tested (SHA-256 `e0b87c26…`):
 
    ```bash
    python3 -m pip install lzallright
@@ -89,7 +91,7 @@ PATH=.venv/bin:$PATH .venv/bin/python scripts/prepare_firmware.py firmware/UPDAT
 ```
 
 The patcher only writes its output if the result is byte-for-byte the image we flashed and tested
-(SHA-256 `32c9cca1…`).
+(SHA-256 `e0b87c26…`).
 
 ### 3. Build the modules and tools
 
@@ -126,10 +128,17 @@ Create these empty files in `h4/` on the card:
 |---|---|
 | `ether_only` | USB Ethernet only, no webcam (camera at `169.254.77.1`, HTTP API at `/gp/gpControl/...`) |
 | `shell` | Root shell over the USB link: `nc 169.254.77.1 2323`. **No password.** Only reachable over the USB cable, not Wi-Fi |
-| `debug` | Logs to the card (`h4/uvc/`, `h4_usb.log`) instead of RAM |
+| `debug` | Also copies the logs to the card every 5 s (`h4/uvc/`, `h4_usb.log`), so they survive a power cycle |
 
 With USB Ethernet up, `scripts/stream_test.py --camera 169.254.77.1 --iface en10` captures and analyzes the raw
 stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhardwareports`, not always `en10`.
+
+## Upgrading from the 720p release
+
+Earlier releases flashed a 720p image (SHA-256 `32c9cca1…`), and their microphone could hang the whole camera when
+an app closed it and opened it again. Patch and flash again with this release (same steps as a first install), and
+replace `h4.sh` and `h4/` on the card with this release's. The new `h4cam.ko` and `h4uvc` need the 1080p image: on
+the 720p one the webcam would announce 1080p and send 720p.
 
 ## Undo
 

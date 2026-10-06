@@ -72,8 +72,15 @@ struct uvc_event {
 #define LOCAL "127.0.0.2"
 #define STREAM_PORT 8554
 #define KEEP_ALIVE "_GPHD_:0:0:2:0.000000\n"
-#define WIDTH 1280
-#define HEIGHT 720
+/* UVC frame index (h4cam.c) → size, and the preview window (setting 64) that
+ * gives it on the --idle1080 firmware: 0 keeps the mode's own 1920x1080, 7 asks
+ * for 1280x720. Switching needs only a stream restart, no mode rebuild. */
+static const struct {
+	int width, height, window;
+} frames[] = {{0, 0, 0}, {1920, 1080, 0}, {1280, 720, 7}};
+#define NFRAMES 2
+static int g_window; /* setting 64 asked for last */
+static volatile double g_last_restart;
 #define FRAME_INTERVAL 333667 /* 100 ns units, 29.97 fps */
 #define BULK_PAYLOAD 16384    /* h4cam bulk_payload */
 #define MAX_FRAME (512 * 1024)
@@ -150,11 +157,16 @@ static int json_field(const char *json, const char *key, int settings)
 	return p ? atoi(p + strlen(k)) : -1;
 }
 
-/* 1280x720 idle preview: 1080 SuperView 30 on the --idle720 firmware, then a
- * photo → video rebuild (the preview only picks up settings on a rebuild). */
-static void apply_preset_720(void)
+/* Idle preview: 1080 SuperView 30 on the --idle1080 firmware, then a
+ * photo → video rebuild (the preview only picks up settings on a rebuild).
+ * gpStream keeps up with 8 Mbps at nice -20; H4UVC_BITRATE overrides it. */
+static void apply_preset(void)
 {
-	say("preset 1280x720 (1080 SuperView 30)");
+	char path[48], window[24];
+	const char *br = getenv("H4UVC_BITRATE");
+	snprintf(path, sizeof(path), "/setting/62/%d", br ? atoi(br) : 8000000);
+	snprintf(window, sizeof(window), "/setting/64/%d", g_window);
+	say("preset 1080 SuperView 30, %s, %s", window, path);
 	api("/setting/2/8", NULL, 0);
 	api("/setting/3/8", NULL, 0);
 	api("/setting/4/0", NULL, 0);
@@ -162,8 +174,8 @@ static void apply_preset_720(void)
 	sleep(3);
 	api("/command/mode?p=0", NULL, 0);
 	sleep(3);
-	api("/setting/64/0", NULL, 0);
-	api("/setting/62/8000000", NULL, 0);
+	api(window, NULL, 0);
+	api(path, NULL, 0);
 }
 
 /* gpStream reads the preview from the RTOS over IPC. On the single Linux core,
@@ -271,8 +283,9 @@ static int stream_on(struct uvc *u)
 {
 	stream_off(u);
 	struct v4l2_format fmt = {.type = V4L2_BUF_TYPE_VIDEO_OUTPUT};
-	fmt.fmt.pix.width = WIDTH;
-	fmt.fmt.pix.height = HEIGHT;
+	int f = u->commit.bFrameIndex;
+	fmt.fmt.pix.width = frames[f].width;
+	fmt.fmt.pix.height = frames[f].height;
 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
 	fmt.fmt.pix.field = V4L2_FIELD_NONE;
 	fmt.fmt.pix.sizeimage = MAX_FRAME;
@@ -308,7 +321,7 @@ static int stream_on(struct uvc *u)
 	u->streaming = 1;
 	u->need_idr = 1;
 	u->frames = u->dropped = 0;
-	say("stream on: H.264 %dx%d, %d buffers of %zu bytes", WIDTH, HEIGHT, NBUFS, u->len[0]);
+	say("stream on: H.264 %dx%d, %d buffers of %zu bytes", frames[f].width, frames[f].height, NBUFS, u->len[0]);
 	return 0;
 }
 
@@ -376,11 +389,12 @@ static void handle_data(struct uvc *u, const struct uvc_request_data *d)
 {
 	struct uvc_streaming_control c;
 	fill_control(&c);
-	/* Only one format, frame and interval exist; take what the host sent for
+	/* One format, two frame sizes, one interval; take what the host sent for
 	 * the rest but keep our limits. */
 	memcpy(&c, d->data, d->length < (int)sizeof(c) ? d->length : (int)sizeof(c));
 	c.bFormatIndex = 1;
-	c.bFrameIndex = 1;
+	if (c.bFrameIndex < 1 || c.bFrameIndex > NFRAMES)
+		c.bFrameIndex = 1;
 	c.dwFrameInterval = FRAME_INTERVAL;
 	c.dwMaxVideoFrameSize = MAX_FRAME;
 	c.dwMaxPayloadTransferSize = BULK_PAYLOAD;
@@ -389,7 +403,15 @@ static void handle_data(struct uvc *u, const struct uvc_request_data *d)
 		say("probe set");
 	} else if (u->control == UVC_VS_COMMIT_CONTROL) {
 		u->commit = c;
-		say("commit: starting stream");
+		say("commit: starting stream, frame %d", c.bFrameIndex);
+		if (frames[c.bFrameIndex].window != g_window) {
+			char path[24];
+			g_window = frames[c.bFrameIndex].window;
+			snprintf(path, sizeof(path), "/setting/64/%d", g_window);
+			say("window %s -> %d", path, api(path, NULL, 0));
+			restart_stream();
+			g_last_restart = now_s();
+		}
 		stream_on(u);
 	}
 	u->control = 0;
@@ -691,7 +713,6 @@ static void on_pes(void *opaque, enum ts_stream st, const uint8_t *es, size_t le
  * microphone's buffer ran dry). The RTOS stops feeding the preview ~50 s after
  * the last HTTP request, so keep asking. */
 static int g_preset;
-static volatile double g_last_restart;
 
 static void *poll_thread(void *arg)
 {
@@ -704,7 +725,7 @@ static void *poll_thread(void *arg)
 			say("camera in USB mode: no preview until it leaves it (h4uvc -p, or the HTTP API)");
 			usb_mode_seen = 1;
 			if (g_preset) {
-				apply_preset_720();
+				apply_preset();
 				restart_stream();
 				g_last_restart = now_s();
 			}
@@ -716,7 +737,7 @@ static void *poll_thread(void *arg)
 
 int main(int argc, char **argv)
 {
-	/* -p: apply the 720p preset (photo → video rebuild) before opening the device.
+	/* -p: apply the preset (photo → video rebuild) before opening the device.
 	 * Off by default: right after a mode switch the RTOS may suspend Linux. */
 	int preset = argc > 1 && !strcmp(argv[1], "-p");
 	const char *dev = argc > 1 + preset ? argv[1 + preset] : "/dev/video0";
@@ -728,7 +749,7 @@ int main(int argc, char **argv)
 		say("camera mode %d, video %d/%d/%d", json_field(status, "43", 0), json_field(status, "2", 1),
 		    json_field(status, "3", 1), json_field(status, "4", 1));
 	if (preset)
-		apply_preset_720();
+		apply_preset();
 
 	/* Linux 3.8's gadget core connects right after binding, overriding the UVC
 	 * function's "stay off the bus until the device is opened": the host
