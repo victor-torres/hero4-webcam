@@ -5,7 +5,7 @@
 #   scripts/build_all.sh
 #
 # Needs Docker, firmware/v05.00.00 from scripts/prepare_firmware.py, and the
-# faad2 2.11.1 release unpacked into vendor/faad2. The kernel tree lives in a
+# faad2 2.11.4 release unpacked into vendor/faad2. The kernel tree lives in a
 # Docker volume (HERO4_VOLUME, default hero4-linux) because the macOS
 # filesystem is case-insensitive.
 set -euo pipefail
@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 vol=${HERO4_VOLUME:-hero4-linux}
 
 [ -f firmware/v05.00.00/kernel.config ] || { echo "run scripts/prepare_firmware.py first"; exit 1; }
-[ -d vendor/faad2/libfaad ] || { echo "unpack faad2 2.11.1 into vendor/faad2 first"; exit 1; }
+[ -d vendor/faad2/libfaad ] || { echo "unpack faad2 2.11.4 into vendor/faad2 first"; exit 1; }
 
 docker build -t hero4-build docker
 docker volume create "$vol" > /dev/null
