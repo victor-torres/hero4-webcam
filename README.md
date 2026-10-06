@@ -169,7 +169,8 @@ stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhar
 
 ## License
 
-GPL-2.0, see [LICENSE](LICENSE). The kernel modules are modified Linux kernel code and keep their original
-headers. `h4uvc` links faad2 (GPL-2.0) statically.
+Copyright (C) 2026 Victor Torres. Licensed under GPL-2.0, see [LICENSE](LICENSE). The kernel modules are modified
+Linux kernel code and keep their original copyright headers. `h4uvc` links faad2 (GPL-2.0) statically; code from
+FAAD2 is copyright (c) Nero AG, www.nero.com.
 
 Contributions are welcome.
