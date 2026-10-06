@@ -73,7 +73,7 @@ The patcher only writes its output if the result is byte-for-byte the image we f
 
 ### 3. Build the modules and tools
 
-Unpack the [faad2 2.11.1](https://github.com/knik0/faad2/releases/tag/2.11.1) source (AAC decoder) into
+Unpack the [faad2 2.11.4](https://github.com/FreewareAdvancedAudio/faad2/releases/tag/2.11.4) source (AAC decoder) into
 `vendor/faad2`, then:
 
 ```bash
@@ -121,8 +121,6 @@ stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhar
 
 ## Known issues
 
-- **Microphone crackle:** short clusters of clicks every 1–3 s. The cause is still being investigated
-  ([docs/findings.md](docs/findings.md), "mic crackle").
 - After the camera re-enumerates (power cycle, replug), some apps need the video device selected again. OBS's video
   capture source is one of them.
 - If the computer goes to sleep, the camera powers off. Its power button brings it back.
@@ -145,11 +143,11 @@ stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhar
 - [evilwombat](https://github.com/evilwombat): HERO4 kernel tree, firmware tools, USB recovery tools
 - [hypoxic/hero4-session](https://github.com/hypoxic/hero4-session): HERO4 Session research
 - [KonradIT/goprowifihack](https://github.com/KonradIT/goprowifihack): GoPro HTTP API documentation
-- [faad2](https://github.com/knik0/faad2): AAC decoder
+- [faad2](https://github.com/FreewareAdvancedAudio/faad2): AAC decoder
 
 ## License
 
 GPL-2.0, see [LICENSE](LICENSE). The kernel modules are modified Linux kernel code and keep their original
 headers. `h4uvc` links faad2 (GPL-2.0) statically.
 
-Contributions are welcome. Pull requests that fix the microphone crackle are especially welcome.
+Contributions are welcome.

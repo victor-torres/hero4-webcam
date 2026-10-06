@@ -22,7 +22,9 @@
  * One packet per request: the controller mangles chains of isochronous
  * descriptors. Underrun: silence.
  * tone=1 sends a 1 kHz sine instead of the buffer, tone=2 a ramp/counter
- * pattern (bring-up tests).
+ * pattern (bring-up tests), tone=3 the ramp with a full packet counter and the
+ * USB microframe each packet was filled in (lines up missed frames with what
+ * the host recorded, sample-exact).
  */
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
@@ -35,7 +37,7 @@ extern void h4_udc_preset_iso(struct usb_ep *ep, int intf, int alt, int maxpacke
 
 static int tone;
 module_param(tone, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(tone, "1: send a 1 kHz test tone; 2: ramp/counter test pattern");
+MODULE_PARM_DESC(tone, "1: send a 1 kHz test tone; 2: ramp/counter test pattern; 3: ramp, counter and microframe");
 
 #define MIC_RATE	48000
 #define MIC_CHANNELS	2
@@ -259,8 +261,14 @@ static unsigned mic_fill_packet(struct h4mic *mic, u8 *buf)
 
 	if (tone) {
 		s16 *s = (s16 *)buf;
+		/* Microframe counter (11 bits) when this packet is filled, i.e. when
+		 * the packet MIC_NREQ before it completed. */
+		u16 uframe = usb_gadget_frame_number(mic->func.config->cdev->gadget) & 0x7ff;
 		for (i = 0; i < MIC_PER_MS; i++)
-			if (tone == 2) {	/* left: ramp within the packet; right: packet counter */
+			if (tone == 3) {	/* left: ramp; right: packet counter, then uframe */
+				s[2 * i] = i * 600;
+				s[2 * i + 1] = i < MIC_PER_MS / 2 ? mic->phase & 0x7fff : uframe;
+			} else if (tone == 2) {	/* left: ramp within the packet; right: packet counter */
 				s[2 * i] = i * 600;
 				s[2 * i + 1] = (mic->phase % 32) * 900;
 			} else

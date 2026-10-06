@@ -196,6 +196,26 @@ static void boost_gpstream(void)
 	closedir(proc);
 }
 
+/* Keep kernel messages off the serial console (they still reach dmesg).
+ * GoPro's gpStream driver logs "received 500 packets" at KERN_ERR every
+ * ~0.6 s; at 115200 baud each line holds the CPU ~4 ms with interrupts off,
+ * the microphone misses 3-4 USB frames and macOS replays 250 ms old audio.
+ * Checked on every poll: GoPro's init (S65gopro2) sets "dmesg -n6" after the
+ * card hook has run. */
+static void quiet_console(void)
+{
+	char level[64] = "";
+	FILE *f = fopen("/proc/sys/kernel/printk", "r+");
+	if (!f)
+		return;
+	if (fgets(level, sizeof(level), f) && atoi(level) > 1) {
+		rewind(f);
+		fputs("1", f);
+		say("console loglevel %d -> 1", atoi(level));
+	}
+	fclose(f);
+}
+
 static void restart_stream(void)
 {
 	int s = api("/execute?p1=gpStream&a1=proto_v2&c1=restart", NULL, 0);
@@ -679,6 +699,7 @@ static void *poll_thread(void *arg)
 	int usb_mode_seen = 0;
 	for (;;) {
 		boost_gpstream();
+		quiet_console();
 		if (api("/status", status, sizeof(status)) == 200 && json_field(status, "43", 0) == 7 && !usb_mode_seen) {
 			say("camera in USB mode: no preview until it leaves it (h4uvc -p, or the HTTP API)");
 			usb_mode_seen = 1;
