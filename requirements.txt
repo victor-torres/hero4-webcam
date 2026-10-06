@@ -1,0 +1,2 @@
+lzallright==0.2.6
+ubi_reader==0.8.12

@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+
+# GoPro-copyrighted firmware and third-party checkouts stay local
+firmware/*
+vendor/*
+!firmware/.gitkeep
+!vendor/.gitkeep
+.venv/
+build/
+captures/
