@@ -25,12 +25,15 @@ is about 225 ms glass to glass at 1080p and 195 ms at 720p.
 The HERO4 Black runs two operating systems: an RTOS (camera, encoder, USB) and Linux 3.8 (Wi-Fi, HTTP API,
 streaming). The firmware is only protected by CRCs, not signed.
 
-1. **Firmware patch** (`scripts/patch_firmware.py`), data only, 346 bytes. Bootloaders, DSP, kernel and RTOS code
+1. **Firmware patch** (`scripts/patch_firmware.py`), data only, 405 bytes. Bootloaders, DSP, kernel and RTOS code
    stay byte-identical.
    - A Linux script that runs whenever the SD card is mounted now also runs `h4.sh` from the card.
    - One entry of the RTOS video mode table changes so the idle preview (1080 SuperView 30, not recording) is
      1920x1080 instead of 848x480. 720p comes from the same mode through the HTTP API. Nothing is written to the card
      while streaming.
+   - A second idle entry reads the full 4000x3000 sensor instead of 2x2-binned 2000x1500 (a copy of the mode the camera
+     records 1080 SuperView 30 with). The webcam uses it through the camera's 2.7K SuperView 30 setting: same
+     framing, still 1080p, visibly sharper on fine texture.
 2. **Kernel modules**, loaded from the card by `h4.sh`. GoPro's kernel has no USB gadget support. We build the
    modules from the GPL source: a module that registers the USB controller, a patched controller driver
    (isochronous transfers for the microphone), and `h4cam`, a composite gadget with UVC, UAC1 and CDC ECM.
@@ -53,7 +56,7 @@ GoPro's code isn't ours to share, so the patcher makes it from your own copy of 
 
 2. Download `hero4-webcam-<version>.zip` from the latest release and unzip it.
 3. Patch the firmware onto the card. This writes `UPDATE/` on it, and only if the result is byte-for-byte the image
-   we flashed and tested (SHA-256 `e0b87c26…`):
+   we flashed and tested (SHA-256 `ab817816…`):
 
    ```bash
    python3 -m pip install lzallright
@@ -91,7 +94,7 @@ PATH=.venv/bin:$PATH .venv/bin/python scripts/prepare_firmware.py firmware/UPDAT
 ```
 
 The patcher only writes its output if the result is byte-for-byte the image we flashed and tested
-(SHA-256 `e0b87c26…`).
+(SHA-256 `ab817816…`).
 
 ### 3. Build the modules and tools
 
@@ -122,23 +125,29 @@ a microphone. Pick it in any app.
 
 ## Options
 
-Create these empty files in `h4/` on the card:
+Create these files in `h4/` on the card (empty, except where a number is given):
 
 | File | Effect |
 |---|---|
 | `ether_only` | USB Ethernet only, no webcam (camera at `169.254.77.1`, HTTP API at `/gp/gpControl/...`) |
 | `shell` | Root shell over the USB link: `nc 169.254.77.1 2323`. **No password.** Only reachable over the USB cable, not Wi-Fi |
 | `debug` | Also copies the logs to the card every 5 s (`h4/uvc/`, `h4_usb.log`), so they survive a power cycle |
+| `bitrate` | Video bitrate in bits/s, e.g. `10000000`. Default 8 Mbps; 10 Mbps had almost no frame loss, 12 Mbps loses frames |
+| `res` | Camera resolution setting: `5` (default) is the full sensor readout, `8` (1080 SuperView) the binned one |
 
 With USB Ethernet up, `scripts/stream_test.py --camera 169.254.77.1 --iface en10` captures and analyzes the raw
 stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhardwareports`, not always `en10`.
 
-## Upgrading from the 720p release
+## Upgrading from an earlier release
 
-Earlier releases flashed a 720p image (SHA-256 `32c9cca1…`), and their microphone could hang the whole camera when
-an app closed it and opened it again. Patch and flash again with this release (same steps as a first install), and
-replace `h4.sh` and `h4/` on the card with this release's. The new `h4cam.ko` and `h4uvc` need the 1080p image: on
-the 720p one the webcam would announce 1080p and send 720p.
+Patch and flash again with this release (same steps as a first install), and replace `h4.sh` and `h4/` on the card
+with this release's.
+
+- From the 1080p image (SHA-256 `e0b87c26…`): the new `h4uvc` works on it too, with the binned readout (2.7K
+  SuperView 30 falls back to the same preview there). Reflash for the full readout.
+- From the 720p image (SHA-256 `32c9cca1…`): its microphone could hang the whole camera when an app closed it and
+  opened it again, and the new `h4cam.ko` and `h4uvc` need the 1080p image (on the 720p one the webcam would announce
+  1080p and send 720p).
 
 ## Undo
 

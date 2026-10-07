@@ -157,17 +157,21 @@ static int json_field(const char *json, const char *key, int settings)
 	return p ? atoi(p + strlen(k)) : -1;
 }
 
-/* Idle preview: 1080 SuperView 30 on the --idle1080 firmware, then a
- * photo → video rebuild (the preview only picks up settings on a rebuild).
+/* Idle preview: 2.7K SuperView 30, then a photo → video rebuild (the preview
+ * only picks up settings on a rebuild). Its idle preview is entry 62 in stock
+ * firmware, the same as 1080 SuperView 30 (1080p on --idle1080); --idlefull
+ * points it at entry 63, the same framing read from the full sensor.
+ * H4UVC_RES overrides the resolution setting (8 = 1080 SuperView, binned).
  * gpStream keeps up with 8 Mbps at nice -20; H4UVC_BITRATE overrides it. */
 static void apply_preset(void)
 {
-	char path[48], window[24];
-	const char *br = getenv("H4UVC_BITRATE");
+	char path[48], window[24], res[24];
+	const char *br = getenv("H4UVC_BITRATE"), *r = getenv("H4UVC_RES");
 	snprintf(path, sizeof(path), "/setting/62/%d", br ? atoi(br) : 8000000);
 	snprintf(window, sizeof(window), "/setting/64/%d", g_window);
-	say("preset 1080 SuperView 30, %s, %s", window, path);
-	api("/setting/2/8", NULL, 0);
+	snprintf(res, sizeof(res), "/setting/2/%d", r ? atoi(r) : 5);
+	say("preset %s 30 fps, %s, %s", res, window, path);
+	api(res, NULL, 0);
 	api("/setting/3/8", NULL, 0);
 	api("/setting/4/0", NULL, 0);
 	api("/command/mode?p=1", NULL, 0);

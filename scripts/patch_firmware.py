@@ -10,7 +10,7 @@ directory's UPDATE/ folder: the patched camera_firmware.bin next to the stock
 camera_loaders.bin and hd4_update.txt. Given camera_firmware.bin, writes just
 the patched image. Needs lzallright (pip install lzallright).
 
-Two changes, both data only; bootloaders, DSP, kernel and RTOS code stay byte-identical:
+Three changes, all data only; bootloaders, DSP, kernel and RTOS code stay byte-identical:
 
 1. SD card hook. The RTOS asks Linux to run /usr/local/share/script/sd_script.sh
    every time the SD card is mounted. We replace that script with an equivalent
@@ -24,6 +24,13 @@ Two changes, both data only; bootloaders, DSP, kernel and RTOS code stay byte-id
    to 1920x1080, so the live stream is 1080p with nothing written to the card
    (h4uvc asks for 1280x720 through the HTTP API when an app wants 720p). Main
    size, bitrate and frame rate stay stock.
+
+3. Full sensor readout. Entry 62 reads the sensor 2x2-binned (2000x1500). Entry
+   63 (idle SuperView 25, only ever used as the PAL idle) becomes a copy of
+   entry 59, the 1080 SuperView 30 recording mode, which reads the full
+   4000x3000 sensor, with a 1920x1080 secondary and the fields every idle entry
+   shares; the 2.7K SuperView 30 video record points its idle at it. h4uvc
+   selects 2.7K SuperView 30: same framing, 1080p, sharper.
 
 Only the official v05.00.00 image is accepted, and the result must match the
 tested image byte for byte (both checked by SHA-256).
@@ -53,7 +60,7 @@ UPDATE_SHA256 = "1d88f5dd7a4fdaa6c1664841996efaf68302b2fe0be89d29eb7bec514124ac7
 UPDATE_FILES = ("camera_firmware.bin", "camera_loaders.bin", "hd4_update.txt")
 STOCK_SHA256 = "f1be2cce699691cd1cd7754cad51b82fdb0c99c036a913bc11024454ec5e29c1"
 # Result of this script on it: the image flashed and tested by the authors
-PATCHED_SHA256 = "e0b87c260ea2d5a465bd7f40946a6dffdc9ba6d698fe2f15c8d7b87fe2ad1e28"
+PATCHED_SHA256 = "ab817816c88636bac883e8413e8f32e82bc10f166f6b67a98cf9a7ec9d7914b8"
 
 ORIGINAL_MARK = b"#This script is used to mount/umount sd card in ambafs."
 HOOK = b"h4.sh"
@@ -163,6 +170,39 @@ def patch_rtos_idle(img):
     return bytes(img)
 
 
+# Full-readout idle: entry 63 = record entry 59 (1080 SuperView 30, 4000x3000
+# readout) as an idle preview with a 1080p secondary, used by 2.7K SuperView 30.
+FULL_ENTRY, FULL_ADDR = 63, 0x03EF1254
+FULL_TEMPLATE, FULL_TEMPLATE_ADDR = 59, 0x03EF0D64
+REC_27K_SV30 = 0x04030044      # video record: res 5 (2.7K SuperView), fps 8 (30), FOV 0
+REC_IDLE_NTSC = 4
+ENTRY_SIZE = 0x13C
+# What every stock idle entry has and record entries don't.
+IDLE_FIELDS = {0xA4: 0, 0x134: 0x202, 0x138: 0, MAIN_BITRATE: IDLE_BITRATE, 0xF0: IDLE_BITRATE,
+               0x108: 2_500_000}
+
+
+def patch_rtos_full(img):
+    img = bytearray(img)
+    u32 = lambda addr: struct.unpack_from("<I", img, addr - RTOS_BASE)[0]
+    e = u32(MODE_TABLE + 4 * FULL_ENTRY)
+    src = u32(MODE_TABLE + 4 * FULL_TEMPLATE)
+    rec = REC_27K_SV30 - RTOS_BASE
+    if not (e == FULL_ADDR and src == FULL_TEMPLATE_ADDR
+            and (u32(e + 0x60), u32(e + 0x64), u32(e + DSP_SEC_SIZE)) == (2000, 1500, 848)
+            and (u32(src + 0x60), u32(src + 0x64)) == (4000, 3000)
+            and img[rec:rec + 8] == bytes([5, 8, 0, 43, 62, 110, 52, 53])):
+        sys.exit("mode table entries 59/63 or the 2.7K SuperView 30 record are not as expected")
+    img[e - RTOS_BASE:e - RTOS_BASE + ENTRY_SIZE] = img[src - RTOS_BASE:src - RTOS_BASE + ENTRY_SIZE]
+    for off in (DSP_SEC_SIZE, ENC_SEC_SIZE):
+        struct.pack_into("<II", img, e + off - RTOS_BASE, *SEC_TO)
+    for off, value in IDLE_FIELDS.items():
+        struct.pack_into("<I", img, e + off - RTOS_BASE, value)
+    img[rec + REC_IDLE_NTSC] = FULL_ENTRY
+    print(f"rtos: full-readout idle in mode {FULL_ENTRY} (from {FULL_TEMPLATE}), used by 2.7K SuperView 30")
+    return bytes(img)
+
+
 def patch(fw, name):
     fw = bytearray(fw)
     digest = hashlib.sha256(fw).hexdigest()
@@ -175,7 +215,7 @@ def patch(fw, name):
         sys.exit("could not find the RTOS section")
     s = rtos[0]
     start, end = s["start"], s["start"] + s["length"]
-    fw[start:end] = patch_rtos_idle(bytes(fw[start:end]))
+    fw[start:end] = patch_rtos_full(patch_rtos_idle(bytes(fw[start:end])))
     struct.pack_into("<I", fw, start - SECTION_HEADER_SIZE, zlib.crc32(fw[start:end]))
 
     ubi = [s for s in sections(bytes(fw)) if fw[s["start"]:s["start"] + 4] == b"UBI#"]

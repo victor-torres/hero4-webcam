@@ -38,6 +38,11 @@ if [ -n "$DEBUG" ]; then
 fi
 echo "uvc_run start up=$(cut -d' ' -f1 /proc/uptime)" > $R/h4uvc.log
 while true; do
+	# Optional overrides, one number per file, read on every (re)start:
+	# h4/bitrate → setting 62, h4/res → setting 2.
+	unset H4UVC_BITRATE H4UVC_RES
+	[ -s $SD/h4/bitrate ] && export H4UVC_BITRATE=$(cat $SD/h4/bitrate)
+	[ -s $SD/h4/res ] && export H4UVC_RES=$(cat $SD/h4/res)
 	# -p: leave USB mode and apply the preset before opening the device.
 	/tmp/h4uvc -p /dev/video0 2>> $R/h4uvc.log
 	echo "h4uvc exited rc=$? up=$(cut -d' ' -f1 /proc/uptime)" >> $R/h4uvc.log
