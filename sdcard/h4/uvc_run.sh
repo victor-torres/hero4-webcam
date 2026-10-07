@@ -10,13 +10,16 @@
 # power cycle, which loses everything in RAM. (h4uvc can't log to the card
 # directly: it keeps the file open, and the card only stores what was written
 # once the file is closed.)
-SD=/tmp/fuse_d
+# H4HOME: where h4.sh runs from (the card, or internal flash); debug logs only
+# ever go to the card.
+SD=${H4HOME:-/tmp/fuse_d}
+CARD=/tmp/fuse_d
 R=/tmp/h4uvc.d
 L=$R
 DEBUG=
-if [ -e $SD/h4/debug ]; then
+if [ -e $CARD/h4/debug ]; then
 	DEBUG=1
-	L=$SD/h4/uvc
+	L=$CARD/h4/uvc
 fi
 mkdir -p $R $L
 [ -x /tmp/h4uvc ] || { cp $SD/h4/h4uvc /tmp/ && chmod 755 /tmp/h4uvc; }

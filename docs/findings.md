@@ -387,3 +387,19 @@ Still open (fixed 2026-10-06, see below: the serial console): clusters of ~140 m
   - 10 Mbps, ~4 min (22 windows): 1 loss in one window, the rest 297–303 frames, 0 losses.
   - 12 Mbps, ~5 min: losses in most windows (typically 2–10, peak 37), dropped frames in nearly all. Still 0 `Error sending message` in dmesg, so the limit is Linux (gpStream/h4uvc on the one core), not the RTOS IPC or USB.
   - Status 6 (overheating) stayed 0 throughout (~25 min of full readout). 8 vs 10 Mbps barely differs in picture (8 vs 12 already looked the same on a still scene) and calls re-encode to a few Mbps anyway, so the default stays 8 Mbps; `h4/bitrate` removed from the card.
+
+## 2026-10-06 (night) — no SD card: the init after S51 runs on every power-on
+
+- A button power-off/on restores Linux from the hibernation image (snapshot PIDs 494/496 back, `/tmp` and a bind mount gone), it isn't a suspend to RAM.
+- The image is taken **inside** init: `S51hibernation` (`ambernation.sh`) runs ~4.15 s after the kernel starts, and `rcS` resumes right there. The syslog (restored with the snapshot) shows it: `PM: Creating hibernation image` / `Restarting tasks ... done` at 21:26:10, then `gpCamApi`, `gpNet`, `babyblue` starting at 21:26:11 — those come from `S55gopro`, and `S52wifi`, `S57bluetooth`, `S65gopro2` follow. **So everything after S51 runs on every power-on.** An earlier (unpublished) analysis assumed the init doesn't run after the resume; that's wrong.
+- `a:` (`/tmp/fuse_a`) and `b:` are mounted before S51 (gpNet reads `/tmp/fuse_b/conf.json` at 21:26:11), so a line at the end of `S65gopro2` can start the stack from internal flash, with no card and no RTOS change. Same kind of in-place UBIFS data-node patch as `sd_script.sh` (787-byte script with ~250 bytes of comments to trade).
+- `sync_rtc.sh` is called by the RTOS (via `sh`, i.e. `util_svc`) when the clock is set over HTTP: setting `date_time` called it twice (bind-mounted probe, log in `h4/rtc_probe.log` on the card). Whether it also runs at power-on is moot now.
+- **USB link lost during a 67 MB upload (UDC bug, open):** uploading `build/nosd` firmware through the port-2401 receiver, with the mic streaming, the controller logged `[USB]:BNA error in ep1out-bulk` (Buffer Not Available on the Ethernet bulk OUT) at 970 s, then `uvc_function_disable` and h4uvc's `host disconnected`. Linux kept running (card heartbeat for 6 more minutes, mic counters normal), the gadget stayed enumerated, but nothing from the Mac got through again (no ARP). The file on the card was 0 bytes. Two earlier 67 MB uploads in the same session went through. ambarella_udc doesn't recover bulk OUT from BNA; the stuck-bulk-IN timer covers IN only. Big files: copy them with the card in the Mac instead.
+
+## 2026-10-06 (night) — webcam with no SD card (verified)
+
+- Flashed `patch_firmware.py --idle1080 --idlefull --nosd` (`build/nosd/camera_firmware.bin`, sha256 `2c0eca6d…`), copied to the card from the Mac after the USB upload died (see above). On the camera: `/etc/init.d/S65gopro2` has the hook on line 14, 787 bytes. Setting 53 was reset by the update again and set back to 1.
+- `a:/hero4/` (h4.sh + h4/, 14 files, ~3 MB) was installed earlier with the same function `h4/install` uses (md5 checked); it survived a hang and a firmware update.
+- **With the card in:** only the card's hook ran (`from /tmp/fuse_d` in `h4.log`); the internal copy waited 10 s, saw the card's lock and exited.
+- **Without the card** (button off, card out, button on): `/tmp/h4.log` = `h4 … pid=658 from /tmp/fuse_a/hero4`; the camera was back on USB ~1.5–2 min after power-on, h4uvc streaming to Photo Booth at 300 frames per 10 s, 0 losses, mic clean, root shell up (internal copy of `h4/shell`). Full readout preset as before.
+- Open: a full power-off cold boot (battery out) without the card, and the timing from power-on to "GoPro HERO4" on the Mac.

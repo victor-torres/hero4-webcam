@@ -1,21 +1,74 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
-# Started as root by the patched sd_script.sh on the camera's Linux side,
-# every time the SD card is mounted. Takes the USB port from the RTOS and
-# boots the camera as a webcam + microphone + USB Ethernet.
+# Started as root on the camera's Linux side: from the SD card by the patched
+# sd_script.sh every time the card is mounted, or from internal flash
+# (/tmp/fuse_a/hero4, see h4/install below) by the patched S65gopro2 on every
+# power-on. Takes the USB port from the RTOS and boots the camera as a
+# webcam + microphone + USB Ethernet. Everything is read next to this script.
 #
 # Optional files in h4/ on the card:
 #   ether_only  USB Ethernet only (no webcam)
 #   shell       root shell on the USB link (nc 169.254.77.1 2323), no password
 #   debug       logs on the card instead of RAM
-SD=/tmp/fuse_d
+#   install     copy h4.sh and h4/ to internal flash, so it runs without a card
+#               (needs the --nosd firmware); removed once done, see h4_install.log
+#   uninstall   remove that copy
+SD=$(cd "$(dirname "$0")" && pwd)
+CARD=/tmp/fuse_d
+NAND=/tmp/fuse_a/hero4
 LOG=/tmp/h4_usb.log
+# What the internal copy needs. Debug logging stays card-only: no logs on NAND.
+FILES="usb-common.ko udc-core.ko ambarella_udc_h4.ko ambarella_udc.ko libcomposite.ko h4_udc_dev.ko
+	videodev.ko h4cam.ko g_ether.ko h4csi h4uvc uvc_run.sh"
+FLAGS="ether_only shell bitrate res"
 
 # Log to RAM. Copied to the card only with h4/debug there (spares the card;
 # the RTOS also takes the card away from Linux while USB is in MTP mode).
-save() { [ -e $SD/h4/debug ] && cp $LOG $SD/h4_usb.log 2> /dev/null && sync; }
+save() { [ -e $CARD/h4/debug ] && cp $LOG $CARD/h4_usb.log 2> /dev/null && sync; }
 
-echo "h4 $(date '+%F %T') up=$(cut -d' ' -f1 /proc/uptime) pid=$$" >> $SD/h4.log
+if [ "$SD" = "$CARD" ]; then
+	BOOTLOG=$SD/h4.log
+else
+	# Internal copy: the card's hook runs right after the resume when a card
+	# with h4.sh is in, and then it's the one in charge.
+	BOOTLOG=/tmp/h4.log
+	sleep 10
+	[ -e /tmp/h4.lock ] || [ -f $CARD/h4.sh ] && exit 0
+fi
+echo "h4 $(date '+%F %T') up=$(cut -d' ' -f1 /proc/uptime) pid=$$ from $SD" >> $BOOTLOG
+
+# Install to / remove from internal flash, from the card only.
+install_nand() {
+	echo "install $(date '+%F %T') to $NAND"
+	rm -rf $NAND && mkdir -p $NAND/h4 && cp $SD/h4.sh $NAND/ || return 1
+	for f in $FILES; do
+		[ -f $SD/h4/$f ] || { [ $f = ambarella_udc_h4.ko ] && continue; echo "missing h4/$f"; return 1; }
+		cp $SD/h4/$f $NAND/h4/ || return 1
+	done
+	for f in $FLAGS; do
+		[ -f $SD/h4/$f ] && { cp $SD/h4/$f $NAND/h4/ || return 1; }
+	done
+	sync
+	for f in h4.sh $(cd $NAND/h4 && ls | sed 's|^|h4/|'); do
+		[ "$(md5sum < $SD/$f)" = "$(md5sum < $NAND/$f)" ] || { echo "md5 mismatch: $f"; return 1; }
+		echo "ok $f"
+	done
+	echo "installed: $(du -sk $NAND | cut -f1) KiB"
+}
+if [ "$SD" = "$CARD" ] && [ -e $SD/h4/install ]; then
+	if install_nand >> $SD/h4_install.log 2>&1; then
+		rm -f $SD/h4/install
+	else
+		echo "install failed, removing $NAND" >> $SD/h4_install.log
+		rm -rf $NAND
+	fi
+	sync
+fi
+if [ "$SD" = "$CARD" ] && [ -e $SD/h4/uninstall ]; then
+	rm -rf $NAND && rm -f $SD/h4/uninstall
+	echo "uninstall $(date '+%F %T'): $NAND removed" >> $SD/h4_install.log
+	sync
+fi
 
 # /tmp is restored from the hibernation image on every boot, so this lock
 # only lasts for the current power cycle.
@@ -32,9 +85,9 @@ if [ -e /tmp/h4.lock ]; then
 	[ -e $SD/h4/shell ] && ! ps | grep -q "[t]cpsvd -v 169.254.77.1 2323" &&
 		tcpsvd -v 169.254.77.1 2323 sh -c 'exec sh 2>&1' > /dev/null 2>&1 &
 	if [ -c /dev/video0 ] && ! ps | grep -q "[u]vc_run.sh"; then
-		cp $SD/h4/uvc_run.sh /tmp/ && sh /tmp/uvc_run.sh > /dev/null 2>&1 &
+		cp $SD/h4/uvc_run.sh /tmp/ && H4HOME=$SD sh /tmp/uvc_run.sh > /dev/null 2>&1 &
 	fi
-	echo "h4 re-armed up=$(cut -d' ' -f1 /proc/uptime)" >> $SD/h4.log
+	echo "h4 re-armed up=$(cut -d' ' -f1 /proc/uptime)" >> $BOOTLOG
 	save
 	exit 0
 fi
@@ -103,7 +156,7 @@ step /tmp/h4csi set 0x43 1
 
 # The gadget connects as soon as h4cam loads; h4uvc reconnects it once it can
 # answer the host (after its ~6 s preset). Run from a RAM copy: the card's filesystem won't replace a file that's open.
-[ -n "$WEBCAM" ] && cp $SD/h4/uvc_run.sh /tmp/ && sh /tmp/uvc_run.sh > /dev/null 2>&1 &
+[ -n "$WEBCAM" ] && cp $SD/h4/uvc_run.sh /tmp/ && H4HOME=$SD sh /tmp/uvc_run.sh > /dev/null 2>&1 &
 
 n=0
 while [ $n -lt 60 ]; do

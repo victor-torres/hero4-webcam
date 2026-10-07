@@ -10,7 +10,7 @@ directory's UPDATE/ folder: the patched camera_firmware.bin next to the stock
 camera_loaders.bin and hd4_update.txt. Given camera_firmware.bin, writes just
 the patched image. Needs lzallright (pip install lzallright).
 
-Three changes, all data only; bootloaders, DSP, kernel and RTOS code stay byte-identical:
+Four changes, all data only; bootloaders, DSP, kernel and RTOS code stay byte-identical:
 
 1. SD card hook. The RTOS asks Linux to run /usr/local/share/script/sd_script.sh
    every time the SD card is mounted. We replace that script with an equivalent
@@ -31,6 +31,13 @@ Three changes, all data only; bootloaders, DSP, kernel and RTOS code stay byte-i
    4000x3000 sensor, with a 1920x1080 secondary and the fields every idle entry
    shares; the 2.7K SuperView 30 video record points its idle at it. h4uvc
    selects 2.7K SuperView 30: same framing, 1080p, sharper.
+
+4. No SD card needed after install. Linux comes back from a hibernation image
+   on every power-on and init continues after S51, so /etc/init.d/S65gopro2
+   runs each time, with the internal a: drive mounted. It is rewritten in place
+   (one uncompressed UBIFS node) with the same commands minus its comments, plus
+   a line that runs /tmp/fuse_a/hero4/h4.sh when it exists (h4/install on the
+   card puts it there).
 
 Only the official v05.00.00 image is accepted, and the result must match the
 tested image byte for byte (both checked by SHA-256).
@@ -60,7 +67,7 @@ UPDATE_SHA256 = "1d88f5dd7a4fdaa6c1664841996efaf68302b2fe0be89d29eb7bec514124ac7
 UPDATE_FILES = ("camera_firmware.bin", "camera_loaders.bin", "hd4_update.txt")
 STOCK_SHA256 = "f1be2cce699691cd1cd7754cad51b82fdb0c99c036a913bc11024454ec5e29c1"
 # Result of this script on it: the image flashed and tested by the authors
-PATCHED_SHA256 = "ab817816c88636bac883e8413e8f32e82bc10f166f6b67a98cf9a7ec9d7914b8"
+PATCHED_SHA256 = "2c0eca6d6249bd2e91328f7fc49618d670ba961af42226322d2ff033058cf068"
 
 ORIGINAL_MARK = b"#This script is used to mount/umount sd card in ambafs."
 HOOK = b"h4.sh"
@@ -91,7 +98,22 @@ def nodes(img):
             pos += 4
 
 
-def patch_ubifs(img):
+def sd_script(original):
+    return NEW_SCRIPT
+
+
+S65_MARK = b"#startup script for Hawii"
+NOSD_HOME = b"/tmp/fuse_a/hero4"
+NOSD_LINE = b"[ -f " + NOSD_HOME + b"/h4.sh ] && sh " + NOSD_HOME + b"/h4.sh &\n"
+
+
+def s65gopro2(original):
+    lines = original.splitlines(keepends=True)
+    keep = [lines[0]] + [l for l in lines[1:] if l.strip() and not l.startswith(b"#")]
+    return b"".join(keep) + NOSD_LINE
+
+
+def patch_ubifs(img, mark=ORIGINAL_MARK, make=sd_script):
     img = bytearray(img)
     data_hits, inodes = [], {}
     for pos, length, ntype in nodes(bytes(img)):
@@ -105,11 +127,11 @@ def patch_ubifs(img):
                 payload = bytes(LZOCompressor.decompress(payload, size))
             elif compr != COMPR_NONE:
                 continue
-            if ORIGINAL_MARK in payload:
+            if mark in payload:
                 data_hits.append((pos, length, inum, payload))
 
     if len(data_hits) != 1:
-        sys.exit(f"expected exactly one sd_script.sh data node, found {len(data_hits)}")
+        sys.exit(f"expected exactly one data node with {mark!r}, found {len(data_hits)}")
     pos, length, inum, original = data_hits[0]
     if len(inodes.get(inum, [])) != 1:
         sys.exit(f"expected exactly one inode node for inode {inum}")
@@ -119,9 +141,10 @@ def patch_ubifs(img):
         sys.exit(f"inode size {isize} != data size {len(original)}: file spans several nodes")
 
     room = length - DATA_HDR
-    if len(NEW_SCRIPT) > room:
-        sys.exit(f"new script is {len(NEW_SCRIPT)} bytes, only {room} fit")
-    new = NEW_SCRIPT + b"\n" * (room - len(NEW_SCRIPT))
+    script = make(original)
+    if len(script) > room:
+        sys.exit(f"new script is {len(script)} bytes, only {room} fit")
+    new = script + b"\n" * (room - len(script))
 
     struct.pack_into("<IH", img, pos + CH_SIZE + 16, room, COMPR_NONE)
     img[pos + DATA_HDR:pos + length] = new
@@ -226,7 +249,7 @@ def patch(fw, name):
     if HOOK in fw[start:end] and ORIGINAL_MARK not in fw[start:end]:
         sys.exit("image looks already patched")
 
-    fw[start:end] = patch_ubifs(bytes(fw[start:end]))
+    fw[start:end] = patch_ubifs(patch_ubifs(bytes(fw[start:end])), S65_MARK, s65gopro2)
     struct.pack_into("<I", fw, start - SECTION_HEADER_SIZE, zlib.crc32(fw[start:end]))
     struct.pack_into("<I", fw, 0, zlib.crc32(fw[GLOBAL_HEADER_SIZE:]))
     if hashlib.sha256(fw).hexdigest() != PATCHED_SHA256:

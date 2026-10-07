@@ -25,7 +25,7 @@ is about 225 ms glass to glass at 1080p and 195 ms at 720p.
 The HERO4 Black runs two operating systems: an RTOS (camera, encoder, USB) and Linux 3.8 (Wi-Fi, HTTP API,
 streaming). The firmware is only protected by CRCs, not signed.
 
-1. **Firmware patch** (`scripts/patch_firmware.py`), data only, 405 bytes. Bootloaders, DSP, kernel and RTOS code
+1. **Firmware patch** (`scripts/patch_firmware.py`), data only, 1148 bytes. Bootloaders, DSP, kernel and RTOS code
    stay byte-identical.
    - A Linux script that runs whenever the SD card is mounted now also runs `h4.sh` from the card.
    - One entry of the RTOS video mode table changes so the idle preview (1080 SuperView 30, not recording) is
@@ -34,6 +34,8 @@ streaming). The firmware is only protected by CRCs, not signed.
    - A second idle entry reads the full 4000x3000 sensor instead of 2x2-binned 2000x1500 (a copy of the mode the camera
      records 1080 SuperView 30 with). The webcam uses it through the camera's 2.7K SuperView 30 setting: same
      framing, still 1080p, visibly sharper on fine texture.
+   - A startup script that runs on every power-on also runs `h4.sh` from the camera's internal flash, when it's been
+     installed there. That's what lets the camera work without the SD card (see below).
 2. **Kernel modules**, loaded from the card by `h4.sh`. GoPro's kernel has no USB gadget support. We build the
    modules from the GPL source: a module that registers the USB controller, a patched controller driver
    (isochronous transfers for the microphone), and `h4cam`, a composite gadget with UVC, UAC1 and CDC ECM.
@@ -56,7 +58,7 @@ GoPro's code isn't ours to share, so the patcher makes it from your own copy of 
 
 2. Download `hero4-webcam-<version>.zip` from the latest release and unzip it.
 3. Patch the firmware onto the card. This writes `UPDATE/` on it, and only if the result is byte-for-byte the image
-   we flashed and tested (SHA-256 `ab817816…`):
+   we flashed and tested (SHA-256 `2c0eca6d…`):
 
    ```bash
    python3 -m pip install lzallright
@@ -94,7 +96,7 @@ PATH=.venv/bin:$PATH .venv/bin/python scripts/prepare_firmware.py firmware/UPDAT
 ```
 
 The patcher only writes its output if the result is byte-for-byte the image we flashed and tested
-(SHA-256 `ab817816…`).
+(SHA-256 `2c0eca6d…`).
 
 ### 3. Build the modules and tools
 
@@ -123,6 +125,19 @@ while.
 Connect the camera to the computer by USB and turn it on. About 45 s later "GoPro HERO4" appears as a camera and as
 a microphone. Pick it in any app.
 
+### 6. Optional: run without the SD card
+
+Create an empty file `h4/install` on the card and turn the camera on once with it. The card's `h4.sh` copies itself
+and `h4/` (about 3 MB) to the camera's internal flash, checks every file's MD5, deletes `h4/install`, and writes the
+result to `h4_install.log` on the card. From then on the camera works with the card out; it takes about 10 s longer
+to appear, since the internal copy first waits to see whether a card takes over.
+
+- With a card that has `h4.sh` in the camera, the card's copy runs, not the internal one. That's how you update or
+  test new files; to update the internal copy, `h4/install` again.
+- `ether_only`, `shell`, `bitrate` and `res` in `h4/` are copied along. `debug` isn't: logs never go to internal
+  flash.
+- `h4/uninstall` on the card removes the internal copy.
+
 ## Options
 
 Create these files in `h4/` on the card (empty, except where a number is given):
@@ -134,6 +149,8 @@ Create these files in `h4/` on the card (empty, except where a number is given):
 | `debug` | Also copies the logs to the card every 5 s (`h4/uvc/`, `h4_usb.log`), so they survive a power cycle |
 | `bitrate` | Video bitrate in bits/s, e.g. `10000000`. Default 8 Mbps; 10 Mbps had almost no frame loss, 12 Mbps loses frames |
 | `res` | Camera resolution setting: `5` (default) is the full sensor readout, `8` (1080 SuperView) the binned one |
+| `install` | Copy the card's files to internal flash, to run without the card (see above). Removed when done |
+| `uninstall` | Remove that internal copy |
 
 With USB Ethernet up, `scripts/stream_test.py --camera 169.254.77.1 --iface en10` captures and analyzes the raw
 stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhardwareports`, not always `en10`.
@@ -143,6 +160,8 @@ stream. The interface is the "Ethernet Gadget" port in `networksetup -listallhar
 Patch and flash again with this release (same steps as a first install), and replace `h4.sh` and `h4/` on the card
 with this release's.
 
+- From the full-readout image (SHA-256 `ab817816…`): the new `h4.sh` works on it too, with the card. Reflash to run
+  without the card.
 - From the 1080p image (SHA-256 `e0b87c26…`): the new `h4uvc` works on it too, with the binned readout (2.7K
   SuperView 30 falls back to the same preview there). Reflash for the full readout.
 - From the 720p image (SHA-256 `32c9cca1…`): its microphone could hang the whole camera when an app closed it and
@@ -152,7 +171,7 @@ with this release's.
 ## Undo
 
 - **Without reflashing:** delete `h4.sh` from the card. The hook does nothing without it, and the camera behaves like
-  stock.
+  stock. If you installed to internal flash, first put `h4/uninstall` on the card and turn the camera on once.
 - **Back to stock firmware:** put the official `UPDATE.zip` contents in `UPDATE/` on the card and update the same way.
   The camera accepted a same-version image for the patch, so this should work, but we haven't tested it.
 - **Bricked camera:** [evilwombat/gopro-usb-tools](https://github.com/evilwombat/gopro-usb-tools) can boot a HERO4
